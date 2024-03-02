@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <mutex>
+#include <memory>
 
 template <typename ReturnType, typename... Args>
 class Callable;
@@ -59,21 +60,23 @@ class Delegate;
 template <typename ReturnType, typename... Args>
 class Delegate<ReturnType(Args...)>
 {
-    using callable_ptr = Callable<ReturnType(Args...)> *;
+    using callable_ptr = std::shared_ptr<Callable<ReturnType(Args...)>>;
 
 private:
+#include <mutex>
+
     std::mutex mtx;
 
     std::vector<callable_ptr> callable_ptrs;
 
-    Delegate<ReturnType(Args...)> &operator+=(callable_ptr f) noexcept
+    Delegate<ReturnType(Args...)> &operator+=(const callable_ptr &f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
         callable_ptrs.push_back(f);
         return *this;
     }
 
-    void operator-=(callable_ptr f) noexcept
+    void operator-=(const callable_ptr &f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
         for (typename ::std::vector<callable_ptr>::reverse_iterator it = callable_ptrs.rbegin(); it < callable_ptrs.rend(); ++it)
@@ -91,16 +94,16 @@ public:
 
     Delegate(ReturnType (*_fp)(Args...))
     {
-        callable_ptrs.push_back(new StaticFunction<ReturnType(Args...)>(_fp));
+        callable_ptrs.push_back(std::make_shared<StaticFunction<ReturnType(Args...)>>(_fp));
     }
 
     template <typename ClassName>
     Delegate(ClassName *_instance_p, ReturnType (ClassName::*_fp)(Args...))
     {
-        callable_ptrs.push_back(new MemberFunction<ClassName, ReturnType(Args...)>(_instance_p, _fp));
+        callable_ptrs.push_back(std::make_shared<MemberFunction<ClassName, ReturnType(Args...)>>(_instance_p, _fp));
     }
 
-    std::vector<callable_ptr> &GetCallablePtrs() { return callable_ptrs; }
+    const std::vector<callable_ptr> &GetCallablePtrs() const { return callable_ptrs; }
 
     // It might NOT work if i just simply copy the callable_ptrs
     Delegate(const Delegate &_other) = delete;
@@ -112,44 +115,37 @@ public:
 
     ~Delegate()
     {
-        for (callable_ptr f : callable_ptrs)
-            delete f;
         callable_ptrs.clear();
     }
 
-    Delegate<ReturnType(Args...)> &operator+=(Delegate<ReturnType(Args...)> &function)
+    Delegate<ReturnType(Args...)> &operator+=(const Delegate<ReturnType(Args...)> &function)
     {
         for (callable_ptr f : function.GetCallablePtrs())
             *this += f;
         return *this;
     }
 
-    void operator-=(Delegate<ReturnType(Args...)> &function)
+    void operator-=(const Delegate<ReturnType(Args...)> &function)
     {
-        for (typename ::std::vector<callable_ptr>::iterator it = function.GetCallablePtrs().begin(); it < function.GetCallablePtrs().end(); ++it)
+        for (typename ::std::vector<callable_ptr>::const_iterator it = function.GetCallablePtrs().begin(); it < function.GetCallablePtrs().end(); ++it)
         {
             *this -= *it;
         }
     }
 
-    ReturnType Execute(Args... args) noexcept
+    std::vector<ReturnType> Execute(Args... args) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
-        ReturnType res;
+        std::vector<ReturnType> results;
         for (callable_ptr f : callable_ptrs)
-            res = f->Execute(args...);
+            results.push_back(f->Execute(args...));
 
-        return res;
+        return results;
     }
 
-    ReturnType operator()(Args... args) noexcept
+    std::vector<ReturnType> operator()(Args... args) noexcept
     {
-        std::lock_guard<std::mutex> lock(mtx);
-        ReturnType res;
-        for (callable_ptr f : callable_ptrs)
-            res = f->Execute(args...);
-
-        return res;
+        return Execute(args...);
     }
 };
 
@@ -157,21 +153,21 @@ public:
 template <typename... Args>
 class Delegate<void(Args...)>
 {
-    using callable_ptr = Callable<void(Args...)> *;
+    using callable_ptr = std::shared_ptr<Callable<void(Args...)>>;
 
 private:
     std::mutex mtx;
 
     std::vector<callable_ptr> callable_ptrs;
 
-    Delegate<void(Args...)> &operator+=(callable_ptr f) noexcept
+    Delegate<void(Args...)> &operator+=(const callable_ptr &f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
         callable_ptrs.push_back(f);
         return *this;
     }
 
-    void operator-=(callable_ptr f) noexcept
+    void operator-=(const callable_ptr &f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
         for (typename ::std::vector<callable_ptr>::reverse_iterator it = callable_ptrs.rbegin(); it < callable_ptrs.rend(); ++it)
@@ -187,18 +183,16 @@ public:
 
     Delegate(void (*_fp)(Args...))
     {
-        callable_ptrs.push_back(new StaticFunction<void(Args...)>(_fp));
+        callable_ptrs.push_back(std::make_shared<StaticFunction<void(Args...)>>(_fp));
     }
 
     template <typename ClassName>
     Delegate(ClassName *_instance_p, void (ClassName::*_fp)(Args...))
     {
-        callable_ptrs.push_back(new MemberFunction<ClassName, void(Args...)>(_instance_p, _fp));
+        callable_ptrs.push_back(std::make_shared<MemberFunction<ClassName, void(Args...)>>(_instance_p, _fp));
     }
 
-    std::vector<callable_ptr> &GetCallablePtrs() { return callable_ptrs; }
-
-    void ClearCallablePtrs() { callable_ptrs.clear(); }
+    const std::vector<callable_ptr> &GetCallablePtrs() const { return callable_ptrs; }
 
     // It might NOT work if i just simply copy the callable_ptrs
     Delegate(const Delegate &_other) = delete;
@@ -210,8 +204,6 @@ public:
 
     ~Delegate()
     {
-        for (callable_ptr f : callable_ptrs)
-            delete f;
         callable_ptrs.clear();
     }
 
@@ -224,7 +216,7 @@ public:
 
     void operator-=(Delegate<void(Args...)> &function)
     {
-        for (typename ::std::vector<callable_ptr>::iterator it = function.GetCallablePtrs().begin(); it < function.GetCallablePtrs().end(); ++it)
+        for (typename ::std::vector<callable_ptr>::const_iterator it = function.GetCallablePtrs().begin(); it < function.GetCallablePtrs().end(); ++it)
         {
             *this -= *it;
         }
@@ -239,9 +231,7 @@ public:
 
     void operator()(Args... args) noexcept
     {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (callable_ptr f : callable_ptrs)
-            f->Execute(args...);
+        Execute(args...);
     }
 };
 
