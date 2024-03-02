@@ -19,6 +19,7 @@ public:
 template <typename FunctionType>
 class FunctionWrapper;
 
+// No void specification for FunctionWrapper<void(Args...)>, because there is Delegate<void(Args...)> in which FunctionWrapper<void(Args...)> has been used
 template <typename ReturnType, typename... Args>
 class FunctionWrapper<ReturnType(Args...)> : public Callable<ReturnType(Args...)>
 {
