@@ -5,33 +5,23 @@
 #include <memory>
 #include <functional>
 
-template <typename ReturnType, typename... Args>
-class Callable;
-
-template <typename ReturnType, typename... Args>
-class Callable<ReturnType(Args...)>
-{
-public:
-    virtual ReturnType Execute(Args... args) = 0;
-    virtual ~Callable() {}
-};
-
 template <typename FunctionType>
 class FunctionWrapper;
 
-// No void specification for FunctionWrapper<void(Args...)>, because there is Delegate<void(Args...)> in which FunctionWrapper<void(Args...)> has been used
 template <typename ReturnType, typename... Args>
-class FunctionWrapper<ReturnType(Args...)> : public Callable<ReturnType(Args...)>
+class FunctionWrapper<ReturnType(Args...)>
 {
+    using std::function<ReturnType(Args...)>::function;
 private:
-    std::function<ReturnType(Args...)> function;
-
+    std::function<ReturnType(Args...)> func;
 public:
-    FunctionWrapper(const std::function<ReturnType(Args...)>& func) : function(func) {}
+    FunctionWrapper(const std::function<ReturnType(Args...)>& f) : func(f) {}
+    FunctionWrapper(const FunctionWrapper<ReturnType(Args...)>& f) : func(f.func) {}
+    FunctionWrapper(const FunctionWrapper<ReturnType(Args...)>&& f) : func(std::move(f.func)) {}
 
-    ReturnType Execute(Args... args) override
+    ReturnType operator()(Args... args) const noexcept
     {
-        return function(args...);
+        return func(args...);
     }
 };
 
@@ -41,27 +31,27 @@ class Delegate;
 template <typename ReturnType, typename... Args>
 class Delegate<ReturnType(Args...)>
 {
-    using callable_ptr = std::shared_ptr<Callable<ReturnType(Args...)>>;
+    using function_ptr = std::shared_ptr<FunctionWrapper<ReturnType(Args...)>>;
 
 private:
     std::mutex mtx;
-    std::vector<callable_ptr> callable_ptrs;
+    std::vector<function_ptr> function_ptrs;
 
-    Delegate<ReturnType(Args...)>& operator+=(const callable_ptr& f) noexcept
+    Delegate<ReturnType(Args...)>& operator+=(const function_ptr& f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
-        callable_ptrs.push_back(f);
+        function_ptrs.push_back(f);
         return *this;
     }
 
-    void operator-=(const callable_ptr& f) noexcept
+    void operator-=(const function_ptr& f) noexcept
     {
         std::lock_guard<std::mutex> lock(mtx);
-        for (auto it = callable_ptrs.rbegin(); it != callable_ptrs.rend(); ++it)
+        for (auto it = function_ptrs.rbegin(); it != function_ptrs.rend(); ++it)
         {
             if (*it == f)
             {
-                callable_ptrs.erase((++it).base());
+                function_ptrs.erase((++it).base());
                 return;
             }
         }
@@ -72,27 +62,27 @@ public:
 
     Delegate(const std::function<ReturnType(Args...)>& func)
     {
-        callable_ptrs.push_back(std::make_shared<FunctionWrapper<ReturnType(Args...)>>(func));
+        function_ptrs.push_back(std::make_shared<FunctionWrapper<ReturnType(Args...)>>(func));
     }
 
     template <typename FunctionType>
     Delegate(const FunctionType& func)
     {
-        callable_ptrs.push_back(std::make_shared<FunctionWrapper<ReturnType(Args...)>>(std::function<ReturnType(Args...)>(func)));
+        function_ptrs.push_back(std::make_shared<FunctionWrapper<ReturnType(Args...)>>(std::function<ReturnType(Args...)>(func)));
     }
 
-    const std::vector<callable_ptr>& GetCallablePtrs() const { return callable_ptrs; }
+    const std::vector<function_ptr>& GetFunctionPtrs() const { return function_ptrs; }
 
     Delegate<ReturnType(Args...)>& operator+=(const Delegate<ReturnType(Args...)>& function)
     {
-        for (const auto& f : function.GetCallablePtrs())
+        for (const auto& f : function.GetFunctionPtrs())
             *this += f;
         return *this;
     }
 
     void operator-=(const Delegate<ReturnType(Args...)>& function)
     {
-        for (const auto& f : function.GetCallablePtrs())
+        for (const auto& f : function.GetFunctionPtrs())
             *this -= f;
     }
 
@@ -100,8 +90,8 @@ public:
     {
         std::lock_guard<std::mutex> lock(mtx);
         std::vector<ReturnType> results;
-        for (const auto& f : callable_ptrs)
-            results.push_back(f->Execute(args...));
+        for (const auto& f : function_ptrs)
+            results.push_back((*f)(args...));
 
         return results;
     }
@@ -111,78 +101,3 @@ public:
         return Execute(args...);
     }
 };
-
-// void specialized template
-template <typename... Args>
-class Delegate<void(Args...)>
-{
-    using callable_ptr = std::shared_ptr<Callable<void(Args...)>>;
-
-private:
-    std::mutex mtx;
-    std::vector<callable_ptr> callable_ptrs;
-
-    Delegate<void(Args...)>& operator+=(const callable_ptr& f) noexcept
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        callable_ptrs.push_back(f);
-        return *this;
-    }
-
-    void operator-=(const callable_ptr& f) noexcept
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (auto it = callable_ptrs.rbegin(); it != callable_ptrs.rend(); ++it)
-        {
-            if (*it == f)
-            {
-                callable_ptrs.erase((++it).base());
-                return;
-            }
-        }
-    }
-
-public:
-    Delegate() {}
-
-    Delegate(const std::function<void(Args...)>& func)
-    {
-        callable_ptrs.push_back(std::make_shared<FunctionWrapper<void(Args...)>>(func));
-    }
-
-    template <typename FunctionType>
-    Delegate(const FunctionType& func)
-    {
-        callable_ptrs.push_back(std::make_shared<FunctionWrapper<void(Args...)>>(std::function<void(Args...)>(func)));
-    }
-
-    const std::vector<callable_ptr>& GetCallablePtrs() const { return callable_ptrs; }
-
-    Delegate<void(Args...)>& operator+=(const Delegate<void(Args...)>& function)
-    {
-        for (const auto& f : function.GetCallablePtrs())
-            *this += f;
-        return *this;
-    }
-
-    void operator-=(const Delegate<void(Args...)>& function)
-    {
-        for (const auto& f : function.GetCallablePtrs())
-            *this -= f;
-    }
-
-    void Execute(Args... args) noexcept
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (const auto& f : callable_ptrs)
-            f->Execute(args...);
-    }
-
-    void operator()(Args... args) noexcept
-    {
-        Execute(args...);
-    }
-};
-
-template <typename... Args>
-using Action = Delegate<void(Args...)>;
